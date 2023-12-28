@@ -1,0 +1,254 @@
+package handlers
+
+import (
+	"blog/db"
+	"blog/structs"
+	"database/sql"
+	"net/http"
+	"strconv"
+
+	"github.com/labstack/echo/v4"
+)
+
+var (
+	DB *sql.DB
+)
+
+func CreateAuthor(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		newAuthor := struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}{}
+		if err := c.Bind(&newAuthor); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		new_author := structs.Author{
+			Is_admin:     false,
+			AuthorID:     0,
+			Username:     newAuthor.Username,
+			Password:     newAuthor.Password,
+			Picture_path: "",
+		}
+
+		err := db.CreateAuthor(DB, new_author)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		newToken, err := db.GenerateToken(newAuthor.Username, newAuthor.Password)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusCreated, newToken)
+	}
+
+}
+
+func Login(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		auth_data := struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}{}
+
+		err := c.Bind(&auth_data)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		right, err := db.Login(DB, auth_data.Username, auth_data.Password)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		if right {
+			tok, err := db.GenerateToken(auth_data.Username, auth_data.Password)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+			return c.JSON(http.StatusOK, tok)
+		} else {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		}
+	}
+}
+
+func CreateComment(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		newComment := struct {
+			Token          string `json:"token"`
+			AuthorID       int    `json:"author_id"`
+			ForeignPostID  int    `json:"foreign_post_id"`
+			CommentContent string `json:"comment_content"`
+		}{}
+		if err := c.Bind(&newComment); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		is_good_token, err := db.VerifyPassword(DB, newComment.Token)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		if is_good_token {
+			clearComment := structs.Comment{
+				Comment_id:      0,
+				Author_id:       newComment.AuthorID,
+				Foreign_post_id: newComment.ForeignPostID,
+				Content:         newComment.CommentContent,
+			}
+
+			err = db.CreateComment(DB, clearComment)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+
+			return c.JSON(http.StatusCreated, newComment)
+		}
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+}
+
+func CreatePost(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		newPost := struct {
+			Token      string   `json:"token"`
+			Username   string   `json:"username"`
+			Title      string   `json:"title"`
+			Subtitle   string   `json:"subtitle"`
+			Categories []string `json:"categories"`
+			Content    string   `json:"content"`
+		}{}
+
+		if err := c.Bind(&newPost); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		is_good_token, err := db.VerifyPassword(DB, newPost.Token)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		if is_good_token {
+			username := newPost.Username
+			newGoodPost := structs.Post{
+				Title:      newPost.Title,
+				Subtitle:   newPost.Subtitle,
+				Categories: newPost.Categories,
+				Content:    newPost.Content,
+			}
+
+			err = db.CreatePost(DB, newGoodPost, username)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+			return c.JSON(http.StatusCreated, newGoodPost)
+
+		}
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+}
+
+func GetAllAuthors(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		user_id, err := strconv.Atoi(c.Param("user_id"))
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "User is not admin"})
+		}
+
+		allUsers, err := db.GetAllUsers(DB, user_id)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusOK, allUsers)
+	}
+}
+
+func CreateEdit(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		data := struct {
+			Token       string `json:"token"`
+			Post_id     int    `json:"post_id"`
+			EditContent string `json:"edit_content"`
+		}{}
+
+		if err := c.Bind(&data); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		is_good_token, err := db.VerifyPassword(DB, data.Token)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		if is_good_token {
+			err = db.CreateEdit(DB, data.EditContent, data.Post_id)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+
+			return c.JSON(http.StatusCreated, data.EditContent)
+		}
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+}
+
+func TestConnection(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		return c.String(http.StatusOK, "WORKS")
+	}
+}
+
+func Like(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		data := struct {
+			Token   string `json:"token"`
+			Post_id int    `json:"post_id"`
+		}{}
+
+		if err := c.Bind(&data); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		is_good_token, err := db.VerifyPassword(DB, data.Token)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		if is_good_token {
+			err := db.IncreaseLikeCount(data.Post_id, DB)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+			return c.JSON(http.StatusOK, 1)
+		}
+		return nil
+	}
+}
+
+func Dislike(DB *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		data := struct {
+			Token   string `json:"token"`
+			Post_id int    `json:"post_id"`
+		}{}
+
+		if err := c.Bind(&data); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		is_good_token, err := db.VerifyPassword(DB, data.Token)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		if is_good_token {
+			err := db.DecreaseDislikeCount(data.Post_id, DB)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+			return c.JSON(http.StatusOK, 1)
+		}
+		return nil
+
+	}
+}
